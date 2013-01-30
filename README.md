@@ -20,6 +20,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 Introduction
 ------------
 
+**N.B.: The functionality provided by this little application is
+basically identical to what you get by setting the
+*"DNSPort [address:]port|auto [isolation flags]"* parameter in your
+Tor configuration file. So consider this as a hands-on experiment
+for Tor proxy communication in Go.**
+
 In case you run a torified application (using the torsocks or tsocks
 helper scripts) and the application in question still uses (domain)
 names to address computers on the internet, the resulting DNS queries
