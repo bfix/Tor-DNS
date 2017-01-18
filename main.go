@@ -130,9 +130,14 @@ func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
 	ns_cnt, pos = getShort(buf, pos)
 	ar_cnt, pos = getShort(buf, pos)
 
-	if an_cnt > 0 || ns_cnt > 0 || ar_cnt > 0 || qd_cnt != 1 {
+	if ar_cnt > 0 {
 		if *flVerbose {
-			fmt.Printf("[Tor-DNS] Request has invalid counts: (%d,%d,%d,%d)\n", qd_cnt, an_cnt, ns_cnt, ar_cnt)
+			fmt.Printf("[Query:%x] Request has %d Additional RRs, but that is not supported\n", id, ar_cnt)
+		}
+	}
+	if an_cnt > 0 || ns_cnt > 0 || qd_cnt != 1 {
+		if *flVerbose {
+			fmt.Printf("[Tor-DNS] Request has invalid counts: (%d,%d,%d)\n", qd_cnt, an_cnt, ns_cnt)
 		}
 		return
 	}
