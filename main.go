@@ -37,8 +37,10 @@ import (
 )
 
 var (
-	flVerbose = flag.Bool("v", false, "verbose output")
-	flDebug   = flag.Bool("D", false, "debug output")
+	flVerbose    = flag.Bool("v", false, "verbose output")
+	flDebug      = flag.Bool("D", false, "debug output")
+	flDnsPort    = flag.String("p", ":53", "the UDP port to listen for DNS requests on")
+	flSocksProxy = flag.String("s", ":9050", "the SOCKSv5 proxy to resolve names via")
 )
 
 // Run a simple DNS service on port 53 (domain) at localhost.
@@ -54,7 +56,7 @@ func run() error {
 
 	buf := make([]byte, 2048)
 
-	srv_addr, err := net.ResolveUDPAddr("udp4", ":53")
+	srv_addr, err := net.ResolveUDPAddr("udp4", *flDnsPort)
 	if err != nil {
 		return fmt.Errorf("[Tor-DNS] Can't resolve service address: " + err.Error())
 	}
@@ -222,7 +224,7 @@ func answer(id int, q query) (r result, err error) {
 	r.q = &q
 	r.valid = false
 
-	conn, err := net.Dial("tcp4", ":9050")
+	conn, err := net.Dial("tcp4", *flSocksProxy)
 	if err != nil {
 		fmt.Println("[Tor-DNS] failed to connect to Tor proxy server: " + err.Error())
 		return
