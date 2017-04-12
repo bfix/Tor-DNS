@@ -3,6 +3,7 @@ Tor-DNS: Simple DNS server that uses a Tor SOCKS5 proxy to resolve names
 ========================================================================
 
 (c) 2013 Bernd Fix   >Y<
+(c) 2017 Michał Trojnara <Michal.Trojnara@stunnel.org>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -77,4 +78,3 @@ Things to consider
 before starting Tor-DNS.
 * Make sure that Tor-DNS is used to resolve local queries by modifying the
 **/etc/resolv.conf** file or whatever is appropriate on your platform.
- 

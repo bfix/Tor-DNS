@@ -9,6 +9,7 @@
  *   client.
  *
  * (c) 2013 Bernd Fix   >Y<
+ * (c) 2017 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -82,12 +83,12 @@ func run() error {
 /*
  * DNS request/response data structures:
  * This assumes that each query returns one (or none) result.
- * - query mode (forward, reverse)
+ * - query opcode (0 for QUERY, 1 for IQUERY)
  * - query parameters (name/addr, type and class for names)
  * - response values (name/addr)
  */
 type query struct {
-	mode  int
+	opcode int
 	name  string
 	addr  net.IP
 	typ   int
@@ -104,24 +105,18 @@ type result struct {
 
 /*
  * Handle incoming DNS packet:
- * - Only handle requests with at least on query resource record and
+ * - Only handle requests with at least one query resource record and
  *   empty response resource records; skip all other packets.
  */
 func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
 
-	var pos, id, qtype int
+	var pos, id, flags int
 	id, pos = getShort(buf, pos)
-	qtype, pos = getShort(buf, pos)
-	if (qtype & 0x8000) != 0 {
+	flags, pos = getShort(buf, pos)
+	opcode := (flags >> 11) & 0xF
+	if opcode > 1 {
 		if *flVerbose {
-			fmt.Printf("[Tor-DNS] Request is not a standard query: %x\n", qtype)
-		}
-		return
-	}
-	mode := (qtype >> 11) & 0xF
-	if mode > 1 {
-		if *flVerbose {
-			fmt.Printf("[Tor-DNS] Request is not a standard type: %x\n", qtype)
+			fmt.Printf("[Tor-DNS] Request has unsupported Opcode: %d\n", opcode)
 		}
 		return
 	}
@@ -145,7 +140,7 @@ func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
 	}
 
 	var q query
-	q.mode = mode
+	q.opcode = opcode
 	name, num := read_name(buf[pos:])
 	q.name = name
 	pos += num
@@ -167,41 +162,51 @@ func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
  */
 func assemble(buf []byte, id int, r result) int {
 
+	flags := 0x8180 // QR|RD|RA
 	num := 0
 	if r.valid {
 		num = 1
+	} else {
+		flags |= 3 // NXDOMAIN
 	}
 
-	pos := setShort(buf, 0, id)
-	pos = setShort(buf, pos, 0x8180)
-	pos = setShort(buf, pos, 1)
-	pos = setShort(buf, pos, num)
-	pos = setShort(buf, pos, 0)
-	pos = setShort(buf, pos, 0)
+	// Header
+	pos := setShort(buf, 0, id) // ID
+	pos = setShort(buf, pos, flags)
+	pos = setShort(buf, pos, 1) // QDCOUNT
+	pos = setShort(buf, pos, num) // ANCOUNT
+	pos = setShort(buf, pos, 0) // NSCOUNT
+	pos = setShort(buf, pos, 0) // ARCOUNT
 
+	// Question
 	name_start := pos
-	pos = write_name(buf, pos, r.q.name)
-	pos = setShort(buf, pos, r.q.typ)
-	pos = setShort(buf, pos, r.q.class)
+	pos = write_name(buf, pos, r.q.name) // QNAME
+	pos = setShort(buf, pos, r.q.typ) // QTYPE
+	pos = setShort(buf, pos, r.q.class) // QCLASS
 
+	// Answer
 	if r.valid {
-		pos = setShort(buf, pos, 0xC000|name_start)
-		pos = setShort(buf, pos, r.q.typ)
-		pos = setShort(buf, pos, r.q.class)
-		pos = setShort(buf, pos, 0)
-		pos = setShort(buf, pos, 900)
-		if r.typ == 1 {
-			pos = setShort(buf, pos, 4)
+		pos = setShort(buf, pos, 0xC000|name_start) // NAME
+		if r.typ == 1 { // SOCKS5 IP v4 address
+			pos = setShort(buf, pos, 1) // TYPE := A
+		} else {
+			pos = setShort(buf, pos, r.q.typ) // TYPE := requested
+		}
+		pos = setShort(buf, pos, r.q.class) // CLASS
+		pos = setShort(buf, pos, 0) // TTL high
+		pos = setShort(buf, pos, 900) // TTL low (15 minutes)
+		rdlength := pos
+		pos += 2 // Fill RDLENGTH later
+		idx := pos
+		if r.typ == 1 { // SOCKS5 IP v4 address
 			for i, v := range r.addr {
 				buf[pos+i] = v
 			}
 			pos += 4
 		} else {
-			idx := pos
-			pos = setShort(buf, pos, 0)
 			pos = write_name(buf, pos, r.name)
-			setShort(buf, idx, pos-idx-2)
 		}
+		setShort(buf, rdlength, pos-idx) // RDLENGTH
 	}
 
 	if *flDebug {
@@ -251,7 +256,7 @@ func answer(id int, q query) (r result, err error) {
 	}
 
 	if *flVerbose {
-		if q.mode == 0 {
+		if q.opcode == 0 {
 			fmt.Printf("[Query:%x] %s\n", id, q.name)
 		} else {
 			fmt.Printf("[Query:%x] %s\n", id, q.addr.String())
@@ -260,13 +265,15 @@ func answer(id int, q query) (r result, err error) {
 
 	size := 0
 	buf[0] = 5
-	if q.mode == 0 {
+	// FIXME: IQUERY has been obsoleted by RFC 3425 (November 2002)
+	// Tor [F1] extension should handle PTR requests instead
+	if q.opcode == 0 {
 		buf[1] = 0xF0
 	} else {
 		buf[1] = 0xF1
 	}
 	buf[2] = 0
-	if q.mode == 0 {
+	if q.opcode == 0 { // QUERY
 		dn := []byte(q.name)
 		num := len(dn)
 		buf[3] = 3
@@ -277,7 +284,7 @@ func answer(id int, q query) (r result, err error) {
 		buf[5+num] = 0
 		buf[6+num] = 0
 		size = num + 7
-	} else {
+	} else { // IQUERY
 		if len(q.addr) > 4 {
 			return
 		}
@@ -319,16 +326,22 @@ func answer(id int, q query) (r result, err error) {
 	}
 
 	r.typ = int(buf[3]) & 0xFF
-	if r.typ == 1 {
+	if r.typ == 1 { // SOCKS5 IP v4 address
 		r.addr = buf[4:8]
 		if *flVerbose {
 			fmt.Printf("[Response:%x] %s\n", id, r.addr.String())
 		}
-	} else if r.typ == 3 {
+	} else if r.typ == 3 { // SOCKS5 DOMAINNAME
 		len := int(buf[4]) & 0xFF
 		r.name = string(buf[5 : len+5])
 		if *flVerbose {
 			fmt.Printf("[Response:%x] %s\n", id, r.name)
+		}
+	} else {
+		len := int(buf[4]) & 0xFF
+		r.name = string(buf[5 : len+5])
+		if *flVerbose {
+			fmt.Printf("[Response:%x:%d] %s\n", id, r.typ, hex.EncodeToString([]byte(r.name)))
 		}
 	}
 	r.valid = true
