@@ -37,6 +37,12 @@ import (
 	"strings"
 )
 
+type packet struct {
+	buf []byte
+	n int
+	cl_addr net.Addr
+}
+
 var (
 	flVerbose    = flag.Bool("v", false, "verbose output")
 	flDebug      = flag.Bool("D", false, "debug output")
@@ -55,8 +61,6 @@ func main() {
 func run() error {
 	flag.Parse()
 
-	buf := make([]byte, 2048)
-
 	srv_addr, err := net.ResolveUDPAddr("udp4", *flDnsPort)
 	if err != nil {
 		return fmt.Errorf("[Tor-DNS] Can't resolve service address: " + err.Error())
@@ -68,16 +72,29 @@ func run() error {
 	}
 	defer conn.Close()
 
-	for {
-		n, cl_addr, err := conn.ReadFrom(buf)
-		if err != nil {
-			continue
-		}
+	c := make(chan packet)
+	for i := 0; i < 5; i++ {
+		go worker(conn, c)
+	}
 
-		go process(conn, cl_addr, buf, n)
+	for {
+		var err error
+		var pkt packet
+		pkt.buf = make([]byte, 2048)
+		pkt.n, pkt.cl_addr, err = conn.ReadFrom(pkt.buf)
+		if err == nil {
+			c <- pkt
+		}
 	}
 
 	return nil
+}
+
+func worker(conn *net.UDPConn, c <-chan packet) {
+	for {
+		pkt := <-c
+		process(conn, pkt.cl_addr, pkt.buf, pkt.n)
+	}
 }
 
 /*
