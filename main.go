@@ -105,11 +105,12 @@ func worker(conn *net.UDPConn, c <-chan packet) {
  * - response values (name/addr)
  */
 type query struct {
+	id     int
 	opcode int
-	name  string
-	addr  net.IP
-	typ   int
-	class int
+	name   string
+	addr   net.IP
+	typ    int
+	class  int
 }
 
 type result struct {
@@ -157,6 +158,7 @@ func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
 	}
 
 	var q query
+	q.id = id
 	q.opcode = opcode
 	name, num := read_name(buf[pos:])
 	q.name = name
@@ -164,12 +166,12 @@ func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
 	q.typ, pos = getShort(buf, pos)
 	q.class, pos = getShort(buf, pos)
 
-	r, err := answer(id, q)
+	r, err := answer(q)
 	if err != nil {
 		fmt.Printf("[Tor-DNS] Can't answer query %x: %s\n", id, err.Error())
 		return
 	}
-	if n = assemble(buf, id, r); n > 0 {
+	if n = assemble(buf, r); n > 0 {
 		conn.WriteTo(buf[:n], addr)
 	}
 }
@@ -177,7 +179,7 @@ func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
 /*
  * Assemble DNS response from list of Tor SOCKS responses.
  */
-func assemble(buf []byte, id int, r result) int {
+func assemble(buf []byte, r result) int {
 
 	flags := 0x8180 // QR|RD|RA
 	num := 0
@@ -188,7 +190,7 @@ func assemble(buf []byte, id int, r result) int {
 	}
 
 	// Header
-	pos := setShort(buf, 0, id) // ID
+	pos := setShort(buf, 0, r.q.id) // ID
 	pos = setShort(buf, pos, flags)
 	pos = setShort(buf, pos, 1) // QDCOUNT
 	pos = setShort(buf, pos, num) // ANCOUNT
@@ -240,7 +242,7 @@ func assemble(buf []byte, id int, r result) int {
  *   "a.b.c.d.in-addr.arpa"; this yields a name instead of an ip-addr)
  * - reverse queries (op=1) pass an ip-addr and request a name
  */
-func answer(id int, q query) (r result, err error) {
+func answer(q query) (r result, err error) {
 
 	buf := make([]byte, 128)
 	r.q = &q
@@ -274,9 +276,9 @@ func answer(id int, q query) (r result, err error) {
 
 	if *flVerbose {
 		if q.opcode == 0 {
-			fmt.Printf("[Query:%x] %s\n", id, q.name)
+			fmt.Printf("[Query:%x] %s\n", q.id, q.name)
 		} else {
-			fmt.Printf("[Query:%x] %s\n", id, q.addr.String())
+			fmt.Printf("[Query:%x] %s\n", q.id, q.addr.String())
 		}
 	}
 
@@ -320,21 +322,21 @@ func answer(id int, q query) (r result, err error) {
 
 	n, err = conn.Write(buf[:size])
 	if err != nil {
-		fmt.Printf("[Tor-DNS] Tor proxy request failure for query %x: %s\n", id, err.Error())
+		fmt.Printf("[Tor-DNS] Tor proxy request failure for query %x: %s\n", q.id, err.Error())
 		return
 	}
 	if n != size {
 		err = errors.New("Size mismtach")
-		fmt.Printf("[Tor-DNS] Tor proxy request failure for query %x: %s\n", id, err.Error())
+		fmt.Printf("[Tor-DNS] Tor proxy request failure for query %x: %s\n", q.id, err.Error())
 		return
 	}
 	n, err = conn.Read(buf)
 	if err != nil {
-		fmt.Printf("[Tor-DNS] Tor proxy response failure for query %x: %s\n", id, err.Error())
+		fmt.Printf("[Tor-DNS] Tor proxy response failure for query %x: %s\n", q.id, err.Error())
 		return
 	}
 	if buf[1] != 0 {
-		fmt.Printf("[Tor-DNS] Tor proxy response failure for query %x: %d\n", id, int(buf[1])&0xFF)
+		fmt.Printf("[Tor-DNS] Tor proxy response failure for query %x: %d\n", q.id, int(buf[1])&0xFF)
 		return
 	}
 
@@ -346,19 +348,19 @@ func answer(id int, q query) (r result, err error) {
 	if r.typ == 1 { // SOCKS5 IP v4 address
 		r.addr = buf[4:8]
 		if *flVerbose {
-			fmt.Printf("[Response:%x] %s\n", id, r.addr.String())
+			fmt.Printf("[Response:%x] %s\n", q.id, r.addr.String())
 		}
 	} else if r.typ == 3 { // SOCKS5 DOMAINNAME
 		len := int(buf[4]) & 0xFF
 		r.name = string(buf[5 : len+5])
 		if *flVerbose {
-			fmt.Printf("[Response:%x] %s\n", id, r.name)
+			fmt.Printf("[Response:%x] %s\n", q.id, r.name)
 		}
 	} else {
 		len := int(buf[4]) & 0xFF
 		r.name = string(buf[5 : len+5])
 		if *flVerbose {
-			fmt.Printf("[Response:%x:%d] %s\n", id, r.typ, hex.EncodeToString([]byte(r.name)))
+			fmt.Printf("[Response:%x:%d] %s\n", q.id, r.typ, hex.EncodeToString([]byte(r.name)))
 		}
 	}
 	r.valid = true
