@@ -35,13 +35,8 @@ import (
 	"log"
 	"net"
 	"strings"
+	"time"
 )
-
-type packet struct {
-	buf []byte
-	n int
-	cl_addr net.Addr
-}
 
 var (
 	flVerbose    = flag.Bool("v", false, "verbose output")
@@ -78,11 +73,12 @@ func run() error {
 	}
 
 	for {
-		var err error
-		var pkt packet
-		pkt.buf = make([]byte, 2048)
-		pkt.n, pkt.cl_addr, err = conn.ReadFrom(pkt.buf)
+		buf := make([]byte, 2048)
+		n, addr, err := conn.ReadFrom(buf)
 		if err == nil {
+			var pkt packet
+			pkt.addr = addr
+			pkt.buf = buf[:n]
 			c <- pkt
 		}
 	}
@@ -90,11 +86,9 @@ func run() error {
 	return nil
 }
 
-func worker(conn *net.UDPConn, c <-chan packet) {
-	for {
-		pkt := <-c
-		process(conn, pkt.cl_addr, pkt.buf, pkt.n)
-	}
+type packet struct {
+	addr net.Addr
+	buf  []byte
 }
 
 /*
@@ -105,6 +99,7 @@ func worker(conn *net.UDPConn, c <-chan packet) {
  * - response values (name/addr)
  */
 type query struct {
+	pkt    *packet
 	id     int
 	opcode int
 	name   string
@@ -121,16 +116,38 @@ type result struct {
 	addr  net.IP
 }
 
+func worker(dns_conn *net.UDPConn, c <-chan packet) {
+	for {
+		socks_conn, err := net.Dial("tcp4", *flSocksProxy)
+		for err != nil {
+			fmt.Println("[Tor-DNS] failed to connect to Tor proxy server: " + err.Error())
+			time.Sleep(time.Second * 1)
+			socks_conn, err = net.Dial("tcp4", *flSocksProxy)
+		}
+		defer socks_conn.Close()
+
+		q, ok := disassemble(<-c)
+		for !ok {
+			q, ok = disassemble(<-c)
+		}
+
+		if r, err := answer(socks_conn, q); err == nil {
+			dns_conn.WriteTo(assemble(r), q.pkt.addr)
+		} else {
+			fmt.Printf("[Tor-DNS] Can't answer query %x: %s\n", q.id, err.Error())
+		}
+	}
+}
+
 /*
  * Handle incoming DNS packet:
  * - Only handle requests with at least one query resource record and
  *   empty response resource records; skip all other packets.
  */
-func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
-
+func disassemble(pkt packet) (q query, ok bool) {
 	var pos, id, flags int
-	id, pos = getShort(buf, pos)
-	flags, pos = getShort(buf, pos)
+	id, pos = getShort(pkt.buf, pos)
+	flags, pos = getShort(pkt.buf, pos)
 	opcode := (flags >> 11) & 0xF
 	if opcode > 1 {
 		if *flVerbose {
@@ -140,10 +157,10 @@ func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
 	}
 
 	var qd_cnt, an_cnt, ns_cnt, ar_cnt int
-	qd_cnt, pos = getShort(buf, pos)
-	an_cnt, pos = getShort(buf, pos)
-	ns_cnt, pos = getShort(buf, pos)
-	ar_cnt, pos = getShort(buf, pos)
+	qd_cnt, pos = getShort(pkt.buf, pos)
+	an_cnt, pos = getShort(pkt.buf, pos)
+	ns_cnt, pos = getShort(pkt.buf, pos)
+	ar_cnt, pos = getShort(pkt.buf, pos)
 
 	if ar_cnt > 0 {
 		if *flVerbose {
@@ -157,30 +174,23 @@ func process(conn *net.UDPConn, addr net.Addr, buf []byte, n int) {
 		return
 	}
 
-	var q query
+	q.pkt = &pkt
 	q.id = id
 	q.opcode = opcode
-	name, num := read_name(buf[pos:])
+	name, num := read_name(pkt.buf[pos:])
 	q.name = name
 	pos += num
-	q.typ, pos = getShort(buf, pos)
-	q.class, pos = getShort(buf, pos)
-
-	r, err := answer(q)
-	if err != nil {
-		fmt.Printf("[Tor-DNS] Can't answer query %x: %s\n", id, err.Error())
-		return
-	}
-	if n = assemble(buf, r); n > 0 {
-		conn.WriteTo(buf[:n], addr)
-	}
+	q.typ, pos = getShort(pkt.buf, pos)
+	q.class, pos = getShort(pkt.buf, pos)
+	ok = true
+	return
 }
 
 /*
  * Assemble DNS response from list of Tor SOCKS responses.
  */
-func assemble(buf []byte, r result) int {
-
+func assemble(r result) []byte {
+	buf := make([]byte, 2048)
 	flags := 0x8180 // QR|RD|RA
 	num := 0
 	if r.valid {
@@ -231,7 +241,7 @@ func assemble(buf []byte, r result) int {
 	if *flDebug {
 		fmt.Println("!!! " + hex.EncodeToString(buf[:pos]))
 	}
-	return pos
+	return buf[:pos]
 }
 
 /*
@@ -242,18 +252,10 @@ func assemble(buf []byte, r result) int {
  *   "a.b.c.d.in-addr.arpa"; this yields a name instead of an ip-addr)
  * - reverse queries (op=1) pass an ip-addr and request a name
  */
-func answer(q query) (r result, err error) {
-
+func answer(conn net.Conn, q query) (r result, err error) {
 	buf := make([]byte, 128)
 	r.q = &q
 	r.valid = false
-
-	conn, err := net.Dial("tcp4", *flSocksProxy)
-	if err != nil {
-		fmt.Println("[Tor-DNS] failed to connect to Tor proxy server: " + err.Error())
-		return
-	}
-	defer conn.Close()
 
 	buf[0] = 5
 	buf[1] = 1
