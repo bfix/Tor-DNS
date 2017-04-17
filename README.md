@@ -3,6 +3,7 @@ Tor-DNS: Simple DNS server that uses a Tor SOCKS5 proxy to resolve names
 ========================================================================
 
 (c) 2013 Bernd Fix   >Y<
+
 (c) 2017 Michał Trojnara <Michal.Trojnara@stunnel.org>
 
 This program is free software: you can redistribute it and/or modify
