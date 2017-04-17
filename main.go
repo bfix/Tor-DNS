@@ -79,7 +79,11 @@ func run() error {
 			var pkt packet
 			pkt.addr = addr
 			pkt.buf = buf[:n]
-			c <- pkt
+			select {
+			case c <- pkt:
+			default: // The pool is busy
+				go process(conn, c, pkt)
+			}
 		}
 	}
 
@@ -118,24 +122,33 @@ type result struct {
 
 func worker(dns_conn *net.UDPConn, c <-chan packet) {
 	for {
-		socks_conn, err := net.Dial("tcp4", *flSocksProxy)
-		for err != nil {
-			fmt.Println("[Tor-DNS] failed to connect to Tor proxy server: " + err.Error())
-			time.Sleep(time.Second * 1)
-			socks_conn, err = net.Dial("tcp4", *flSocksProxy)
-		}
-		defer socks_conn.Close()
+		resolve(dns_conn, c)
+	}
+}
 
-		q, ok := disassemble(<-c)
-		for !ok {
-			q, ok = disassemble(<-c)
-		}
+func process(dns_conn *net.UDPConn, c chan packet, pkt packet) {
+	go resolve(dns_conn, c)
+	c <- pkt
+}
 
-		if r, err := answer(socks_conn, q); err == nil {
-			dns_conn.WriteTo(assemble(r), q.pkt.addr)
-		} else {
-			fmt.Printf("[Tor-DNS] Can't answer query %x: %s\n", q.id, err.Error())
-		}
+func resolve(dns_conn *net.UDPConn, c <-chan packet) {
+	socks_conn, err := net.Dial("tcp4", *flSocksProxy)
+	if err != nil {
+		fmt.Println("[Tor-DNS] failed to connect to Tor proxy server: " + err.Error())
+		time.Sleep(time.Second * 1) // Rate-limit connection attempts
+		return
+	}
+	defer socks_conn.Close()
+
+	q, ok := disassemble(<-c)
+	if !ok {
+		return
+	}
+
+	if r, err := answer(socks_conn, q); err == nil {
+		dns_conn.WriteTo(assemble(r), q.pkt.addr)
+	} else {
+		fmt.Printf("[Tor-DNS] Can't answer query %x: %s\n", q.id, err.Error())
 	}
 }
 
