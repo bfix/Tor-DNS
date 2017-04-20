@@ -132,6 +132,12 @@ func process(dns_conn *net.UDPConn, c chan packet, pkt packet) {
 }
 
 func resolve(dns_conn *net.UDPConn, c <-chan packet) {
+	defer func() { // Gracefully recover from index out of range
+		if r := recover(); r != nil {
+			fmt.Println("[Tor-DNS] recovered:", r)
+		}
+	}()
+
 	socks_conn, err := net.Dial("tcp4", *flSocksProxy)
 	if err != nil {
 		fmt.Println("[Tor-DNS] failed to connect to Tor proxy server: " + err.Error())
