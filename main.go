@@ -56,12 +56,12 @@ func main() {
 func run() error {
 	flag.Parse()
 
-	srv_addr, err := net.ResolveUDPAddr("udp4", *flDnsPort)
+	srv_addr, err := net.ResolveUDPAddr("udp", *flDnsPort)
 	if err != nil {
 		return fmt.Errorf("[Tor-DNS] Can't resolve service address: " + err.Error())
 	}
 
-	conn, err := net.ListenUDP("udp4", srv_addr)
+	conn, err := net.ListenUDP("udp", srv_addr)
 	if err != nil {
 		return fmt.Errorf("[Tor-DNS] Can't listen on service port: " + err.Error())
 	}
@@ -138,7 +138,7 @@ func resolve(dns_conn *net.UDPConn, c <-chan packet) {
 		}
 	}()
 
-	socks_conn, err := net.Dial("tcp4", *flSocksProxy)
+	socks_conn, err := net.Dial("tcp", *flSocksProxy)
 	if err != nil {
 		fmt.Println("[Tor-DNS] failed to connect to Tor proxy server: " + err.Error())
 		time.Sleep(time.Second * 1) // Rate-limit connection attempts
