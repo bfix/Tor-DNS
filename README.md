@@ -2,7 +2,7 @@
 Tor-DNS: Simple DNS server that uses a Tor SOCKS5 proxy to resolve names 
 ========================================================================
 
-(c) 2013 Bernd Fix   >Y<
+(c) 2013-2019 Bernd Fix  >Y<
 
 (c) 2017 Michał Trojnara <Michal.Trojnara@stunnel.org>
 
@@ -62,15 +62,41 @@ This version ot Tor-DNS is designed for the Go1 release; see
 To build an executable for your platform, change into the source directory
 and type the following command:
 
-    $ go build -o tor-dns
+```bash
+$ go build -o tor-dns
+```
     
-This builds the required executable that can then be run using the
-following command:
+This builds the required executable.
 
-    $ sudo ./tor-dns
+Usage
+-----
+
+The program can be run using the following command:
+
+```bash
+$ sudo ./tor-dns
+```
 
 Because the server is running on the privileged port 53 (domain) it requires
 root permissions to be run.
+
+The program accepts the following command line arguments:
+
+* `-v`: verbose output (default: off)
+* `-D`: debug output (default: off)
+* `-p`: UDP port to listen on for DNS requests (default: 53)
+* `-s`: SOCKSv5 proxy used to resolve names (default: ":9050")
+
+The `-s` option is a two part string seperated by the `+` character; the first
+part specifies the network (`tcp` or `unix`) to use for connecting to the Tor
+proxy, the second part specifies the address (format depending on the selected
+network). If the first part is missing, the network is assumed to be `tcp`
+(backwards compatibility). To access the Tor proxy via a Unix domain socket,
+you can for example specify:
+
+```bash
+$ sudo ./tor-dns -s "unix+/tmp/tor-proxy.sock"
+```
 
 Things to consider
 ------------------

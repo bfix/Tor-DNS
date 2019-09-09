@@ -8,7 +8,7 @@
  * - send the response from the Tor resolver back to the requesting
  *   client.
  *
- * (c) 2013 Bernd Fix   >Y<
+ * (c) 2013-2019 Bernd Fix  >Y<
  * (c) 2017 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  * This program is free software: you can redistribute it and/or modify it
@@ -138,7 +138,18 @@ func resolve(dns_conn *net.UDPConn, c <-chan packet) {
 		}
 	}()
 
-	socks_conn, err := net.Dial("tcp", *flSocksProxy)
+	// split SOCKS address into parts; use first part as network specification
+	// and second part as address. If only one part is given, the network
+	// defaults to "tcp" (backwards compatibility)
+	network := "tcp"
+	addr := *flSocksProxy
+	parts := strings.Split(addr, "+")
+	if len(parts) > 1 {
+		network = parts[0]
+		addr = parts[1]
+	}
+
+	socks_conn, err := net.Dial(network, addr)
 	if err != nil {
 		fmt.Println("[Tor-DNS] failed to connect to Tor proxy server: " + err.Error())
 		time.Sleep(time.Second * 1) // Rate-limit connection attempts
@@ -221,28 +232,28 @@ func assemble(r result) []byte {
 	// Header
 	pos := setShort(buf, 0, r.q.id) // ID
 	pos = setShort(buf, pos, flags)
-	pos = setShort(buf, pos, 1) // QDCOUNT
+	pos = setShort(buf, pos, 1)   // QDCOUNT
 	pos = setShort(buf, pos, num) // ANCOUNT
-	pos = setShort(buf, pos, 0) // NSCOUNT
-	pos = setShort(buf, pos, 0) // ARCOUNT
+	pos = setShort(buf, pos, 0)   // NSCOUNT
+	pos = setShort(buf, pos, 0)   // ARCOUNT
 
 	// Question
 	name_start := pos
 	pos = write_name(buf, pos, r.q.name) // QNAME
-	pos = setShort(buf, pos, r.q.typ) // QTYPE
-	pos = setShort(buf, pos, r.q.class) // QCLASS
+	pos = setShort(buf, pos, r.q.typ)    // QTYPE
+	pos = setShort(buf, pos, r.q.class)  // QCLASS
 
 	// Answer
 	if r.valid {
 		pos = setShort(buf, pos, 0xC000|name_start) // NAME
-		if r.typ == 1 { // SOCKS5 IP v4 address
+		if r.typ == 1 {                             // SOCKS5 IP v4 address
 			pos = setShort(buf, pos, 1) // TYPE := A
 		} else {
 			pos = setShort(buf, pos, r.q.typ) // TYPE := requested
 		}
 		pos = setShort(buf, pos, r.q.class) // CLASS
-		pos = setShort(buf, pos, 0) // TTL high
-		pos = setShort(buf, pos, 900) // TTL low (15 minutes)
+		pos = setShort(buf, pos, 0)         // TTL high
+		pos = setShort(buf, pos, 900)       // TTL low (15 minutes)
 		rdlength := pos
 		pos += 2 // Fill RDLENGTH later
 		idx := pos
