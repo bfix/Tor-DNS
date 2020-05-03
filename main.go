@@ -248,6 +248,8 @@ func assemble(r result) []byte {
 		pos = setShort(buf, pos, 0xC000|name_start) // NAME
 		if r.typ == 1 {                             // SOCKS5 IP v4 address
 			pos = setShort(buf, pos, 1) // TYPE := A
+		} else if r.typ == 4 { // SOCKS5 IP v6 address
+			pos = setShort(buf, pos, 28) // TYPE := AAAA
 		} else {
 			pos = setShort(buf, pos, r.q.typ) // TYPE := requested
 		}
@@ -257,11 +259,11 @@ func assemble(r result) []byte {
 		rdlength := pos
 		pos += 2 // Fill RDLENGTH later
 		idx := pos
-		if r.typ == 1 { // SOCKS5 IP v4 address
+		if r.typ == 1 || r.typ == 4 { // SOCKS5 IP address
 			for i, v := range r.addr {
 				buf[pos+i] = v
 			}
-			pos += 4
+			pos += 4 * r.typ
 		} else {
 			pos = write_name(buf, pos, r.name)
 		}
@@ -387,6 +389,11 @@ func answer(conn net.Conn, q query) (r result, err error) {
 		r.name = string(buf[5 : len+5])
 		if *flVerbose {
 			fmt.Printf("[Response:%x] %s\n", q.id, r.name)
+		}
+	} else if r.typ == 4 { // SOCKS5 IP v6 address
+		r.addr = buf[4:20]
+		if *flVerbose {
+			fmt.Printf("[Response:%x] %s\n", q.id, r.addr.String())
 		}
 	} else {
 		len := int(buf[4]) & 0xFF
