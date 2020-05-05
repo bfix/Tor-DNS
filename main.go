@@ -9,7 +9,7 @@
  *   client.
  *
  * (c) 2013-2019 Bernd Fix  >Y<
- * (c) 2017 Michał Trojnara <Michal.Trojnara@stunnel.org>
+ * (c) 2017,2020 Michał Trojnara <Michal.Trojnara@stunnel.org>
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU Affero General Public License as published
@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -310,43 +311,45 @@ func answer(conn net.Conn, q query) (r result, err error) {
 
 	if *flVerbose {
 		if q.opcode == 0 {
-			fmt.Printf("[Query:%x] %s\n", q.id, q.name)
+			fmt.Printf("[Query:%x:%d] %s\n", q.id, q.typ, q.name)
 		} else {
-			fmt.Printf("[Query:%x] %s\n", q.id, q.addr.String())
+			fmt.Printf("[Query:%x:%d] %s\n", q.id, q.typ, q.addr.String())
 		}
 	}
 
 	size := 0
-	buf[0] = 5
-	// FIXME: IQUERY has been obsoleted by RFC 3425 (November 2002)
-	// Tor [F1] extension should handle PTR requests instead
-	if q.opcode == 0 {
-		buf[1] = 0xF0
-	} else {
-		buf[1] = 0xF1
-	}
-	buf[2] = 0
+	buf[0] = 5         // VER: 5
 	if q.opcode == 0 { // QUERY
-		dn := []byte(q.name)
+		var dn []byte
+		if q.typ == 12 { // PTR
+			buf[1] = 0xF1 // CMD: RESOLVE_PTR
+			dn = []byte(ptr2ip(q.name))
+		} else { // Any other record type
+			buf[1] = 0xF0 // CMD: RESOLVE
+			dn = []byte(q.name)
+		}
 		num := len(dn)
-		buf[3] = 3
+		buf[2] = 0 // RSV
+		buf[3] = 3 // ATYP: DOMAINNAME
 		buf[4] = byte(num)
 		for i, v := range dn {
 			buf[5+i] = v
 		}
-		buf[5+num] = 0
-		buf[6+num] = 0
+		buf[5+num] = 0 // DST.PORT
+		buf[6+num] = 0 // DST.PORT
 		size = num + 7
-	} else { // IQUERY
-		if len(q.addr) > 4 {
+	} else { // IQUERY (obsoleted by RFC 3425 in November 2002)
+		buf[1] = 0xF1 // CMD: RESOLVE_PTR
+		buf[2] = 0    // RSV
+		if len(q.addr) != 4 {
 			return
 		}
-		buf[3] = 1
+		buf[3] = 1 // ATYP: IP V4 address
 		for i, v := range q.addr {
 			buf[4+i] = v
 		}
-		buf[8] = 0
-		buf[9] = 0
+		buf[8] = 0 // DST.PORT
+		buf[9] = 0 // DST.PORT
 		size = 10
 	}
 
@@ -484,4 +487,25 @@ func write_name(buf []byte, pos int, name string) int {
 	}
 	buf[pos] = 0
 	return pos + 1
+}
+
+func ptr2ip(name string) string {
+	if strings.HasSuffix(name, ".in-addr.arpa") {
+		var ip4 []byte
+		for _, str := range strings.Split(name, ".")[:4] {
+			num, _ := strconv.Atoi(str)
+			ip4 = append([]byte{byte(num)}, ip4...)
+		}
+		return net.IP(ip4).String()
+	} else if strings.HasSuffix(name, ".ip6.arpa") {
+		var str string
+		for _, chr := range strings.Split(name, ".")[:32] {
+			str = chr + str
+		}
+		ip6 := make([]byte, hex.DecodedLen(len(str)))
+		hex.Decode(ip6, []byte(str))
+		return net.IP(ip6).String()
+	} else {
+		return name // Nothing we could parse
+	}
 }
